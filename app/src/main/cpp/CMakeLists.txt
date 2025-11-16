@@ -30,7 +30,7 @@ add_library(flam
 find_library(log-lib
         log)
 
-# Humari "flam" library ko OpenCV aur logging libraries se link karta hai.
+
 target_link_libraries(flam
         ${OpenCV_LIBS}
         ${log-lib})
