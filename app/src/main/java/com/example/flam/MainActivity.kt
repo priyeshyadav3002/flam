@@ -1,23 +1,30 @@
-// Make sure this package name matches your project's package name
+// Aapka package name
 package com.example.flam
 
 // --- Imports ---
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.ImageFormat // NAYA: ImageReader ke liye
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
+import android.media.ImageReader // NAYA: Yeh frame buffer hai
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.Log // NAYA: Logging ke liye
 import android.view.Surface
 import android.view.TextureView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.example.flam.databinding.ActivityMainBinding
 import java.util.*
 
 class MainActivity : AppCompatActivity() {
+
+    private val CAMERA_REQUEST_CODE = 101
 
     // --- Member Variables ---
     private lateinit var textureView: TextureView
@@ -27,35 +34,62 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraId: String
     private var backgroundHandler: Handler? = null
     private var backgroundThread: HandlerThread? = null
-
-    // This is from the template, we'll keep it for now
     private lateinit var binding: ActivityMainBinding
+
+    // --- NAYA: C++ Processing ke liye ImageReader ---
+    private lateinit var imageReader: ImageReader
+    private var isProcessingFrame = false // Ek flag taaki processing overflow na ho
+
+    // Yeh listener har baar fire hota hai jab camera se naya frame taiyaar hota hai
+    private val onImageAvailableListener = ImageReader.OnImageAvailableListener { reader ->
+        // Sabse naya frame lo
+        val image = reader.acquireLatestImage() ?: return@OnImageAvailableListener
+
+        // Hum ek flag use karte hain taaki agar C++ busy hai toh frame drop kar dein
+        // Isse app responsive rehta hai
+        if (!isProcessingFrame) {
+            isProcessingFrame = true
+
+            // Y, U, aur V planes (YUV_420_888 format) ka data lo
+            val yBuffer = image.planes[0].buffer
+            val uBuffer = image.planes[1].buffer
+            val vBuffer = image.planes[2].buffer
+
+            // --- YEH HAI ASLI CHEEZ ---
+            // Data ko seedha humare C++ function mein bhejo
+            processFrame(
+                image.width,
+                image.height,
+                yBuffer,
+                uBuffer,
+                vBuffer
+            )
+            // -----------------------
+
+            isProcessingFrame = false
+        }
+
+        // Frame ko close karna na bhoolein!
+        image.close()
+    }
+
 
     // --- Activity Lifecycle Methods ---
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // This is part of the template, we'll keep it
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
-        // Find the TextureView from our layout (which is now the root)
         textureView = findViewById(R.id.textureView)
 
-        // This is the listener that waits for the TextureView to be ready
         textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-                // Surface is ready, now we can open the camera
-                openCamera()
+                checkCameraPermission()
             }
             override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
             override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
         }
-
-        // We comment out the text view part from the template
-        // binding.sampleText.text = stringFromJNI()
     }
 
     override fun onResume() {
@@ -63,7 +97,7 @@ class MainActivity : AppCompatActivity() {
         startBackgroundThread()
 
         if (textureView.isAvailable) {
-            openCamera()
+            checkCameraPermission()
         }
     }
 
@@ -73,7 +107,41 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
     }
 
-    // --- Background Thread Methods ---
+    // --- Permission Handling Methods (Koi change nahi) ---
+
+    private fun checkCameraPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            != PackageManager.PERMISSION_GRANTED) {
+            requestCameraPermission()
+        } else {
+            openCamera()
+        }
+    }
+
+    private fun requestCameraPermission() {
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.CAMERA),
+            CAMERA_REQUEST_CODE
+        )
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == CAMERA_REQUEST_CODE) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                openCamera()
+            } else {
+                Toast.makeText(this, "Camera permission is required", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    // --- Background Thread Methods (Koi change nahi) ---
 
     private fun startBackgroundThread() {
         backgroundThread = HandlerThread("CameraBackground").also { it.start() }
@@ -91,15 +159,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- Camera Methods ---
+    // --- Camera Methods (Yeh badle hain) ---
 
     private fun openCamera() {
         val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
         try {
-            cameraId = manager.cameraIdList[0] // [0] is usually the back camera
+            cameraId = manager.cameraIdList[0]
 
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                // You MUST grant the permission in your phone's settings manually for this to work.
+            // --- NAYA: ImageReader ko set up karein ---
+            // Hum 1920x1080 size ke YUV_420_888 format ke frames receive karenge
+            imageReader = ImageReader.newInstance(1920, 1080, ImageFormat.YUV_420_888, 2)
+
+            // Listener ko background thread par run karein
+            imageReader.setOnImageAvailableListener(onImageAvailableListener, backgroundHandler)
+            // ------------------------------------
+
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
                 return
             }
 
@@ -130,22 +206,30 @@ class MainActivity : AppCompatActivity() {
             val surface = Surface(texture)
 
             previewRequestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+
+            // --- MODIFIED: Ab DO (2) targets hain ---
+            // 1. 'surface' (Screen par live preview ke liye)
             previewRequestBuilder.addTarget(surface)
+            // 2. 'imageReader.surface' (Frames ko C++ mein bhejne ke liye)
+            previewRequestBuilder.addTarget(imageReader.surface) // <-- NAYA
 
-            cameraDevice?.createCaptureSession(listOf(surface), object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(session: CameraCaptureSession) {
-                    if (cameraDevice == null) return
+            // --- MODIFIED: Session ko DO (2) surfaces ke saath banayein ---
+            cameraDevice?.createCaptureSession(
+                listOf(surface, imageReader.surface), // <-- NAYA
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        if (cameraDevice == null) return
 
-                    captureSession = session
-                    try {
-                        previewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                        captureSession?.setRepeatingRequest(previewRequestBuilder.build(), null, backgroundHandler)
-                    } catch (e: CameraAccessException) {
-                        e.printStackTrace()
+                        captureSession = session
+                        try {
+                            previewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                            captureSession?.setRepeatingRequest(previewRequestBuilder.build(), null, backgroundHandler)
+                        } catch (e: CameraAccessException) {
+                            e.printStackTrace()
+                        }
                     }
-                }
-                override fun onConfigureFailed(session: CameraCaptureSession) {}
-            }, backgroundHandler)
+                    override fun onConfigureFailed(session: CameraCaptureSession) {}
+                }, backgroundHandler)
         } catch (e: CameraAccessException) {
             e.printStackTrace()
         }
@@ -156,18 +240,31 @@ class MainActivity : AppCompatActivity() {
         captureSession = null
         cameraDevice?.close()
         cameraDevice = null
+        // --- NAYA: ImageReader ko bhi close karein ---
+        imageReader?.close()
     }
 
+    // --- JNI Function Declarations ---
+
     /**
-     * A native method that is implemented by the 'flam' native library,
-     * which is packaged with this application.
+     * Yeh NAYA native function hai jise hum call kar rahe hain.
+     */
+    external fun processFrame(
+        width: Int,
+        height: Int,
+        yBuffer: java.nio.ByteBuffer,
+        uBuffer: java.nio.ByteBuffer,
+        vBuffer: java.nio.ByteBuffer
+    )
+
+    /**
+     * Template ka default function.
      */
     external fun stringFromJNI(): String
 
     companion object {
-        // Used to load the 'flam' library on application startup.
-        // This MUST match the library name in your CMakeLists.txt
         init {
+            // Library ka naam "flam" load karein
             System.loadLibrary("flam")
         }
     }
