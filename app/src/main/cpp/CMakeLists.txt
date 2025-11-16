@@ -1,33 +1,36 @@
-# Sets the minimum version of CMake required to build your native library.
-# This ensures that a certain set of features are available to
-# guidance link: https://cmake.org/cmake/help/latest/command/cmake_minimum_required.html
+# Sets the minimum version of CMake required.
 cmake_minimum_required(VERSION 3.22.1)
 
-# Declares and names the project.
-# guidance link: https://cmake.org/cmake/help/latest/command/project.html
+# Declares the project name.
 project(flam)
 
-# Creates and names a library, sets it as SHARED
-# (a .so file) and provides the relative paths to the source code.
-#
-# !! THIS IS THE IMPORTANT CHANGE !!
-# We name the library "flam" to match your project.
-#
-# guidance link: https://cmake.org/cmake/help/latest/command/add_library.html
+# --- START OF OPENCV CONFIGURATION ---
+
+# 1. SET THE PATH TO YOUR OPENCV SDK
+#    Yeh aapka path hai jo aapne diya tha.
+set(OpenCV_DIR "C:/Users/aryan/AndroidStudioProjects/Opencv/sdk/native/jni")
+
+# 2. FIND THE OPENCV PACKAGE
+#    Yeh command upar wale path se OpenCV ko dhoondta hai.
+find_package(OpenCV REQUIRED)
+
+# 3. INCLUDE THE OPENCV HEADERS
+#    Iss se hum C++ code mein OpenCV ki files include kar paayenge.
+include_directories(${OpenCV_INCLUDE_DIRS})
+
+# --- END OF OPENCV CONFIGURATION ---
+
+
+# Humari native library "flam" banata hai.
 add_library(flam
         SHARED
         native-lib.cpp)
 
-# Specifies a path to search for files.
-# guidance link: https://cmake.org/cmake/help/latest/command/find_library.html
-find_library( # Sets the name of the path variable.
-        log-lib
-
-        # Specifies the name of the NDK library that
-        # you want CMake to locate.
+# Android ki logging library dhoondta hai.
+find_library(log-lib
         log)
 
-# Specifies the libraries to link a target against.
-# guidance link: https://cmake.org/cmake/help/latest/command/target_link_libraries.html
+# Humari "flam" library ko OpenCV aur logging libraries se link karta hai.
 target_link_libraries(flam
+        ${OpenCV_LIBS}
         ${log-lib})
